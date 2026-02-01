@@ -647,6 +647,22 @@ check_and_offer_backup_restore() {
     done
 }
 
+# These functions are also present in the management script.
+# They are needed here for the initial installation run.
+get_container_cpus() {
+    local idx=${1:-1}
+    local var="CPUS_${idx}"
+    local val="${!var}"
+    echo "${val:-${DOCKER_CPUS:-}}"
+}
+
+get_container_memory() {
+    local idx=${1:-1}
+    local var="MEMORY_${idx}"
+    local val="${!var}"
+    echo "${val:-${DOCKER_MEMORY:-}}"
+}
+
 run_conduit() {
     local count=${CONTAINER_COUNT:-1}
     log_info "Starting Conduit ($count container(s))..."
@@ -3251,6 +3267,47 @@ change_resource_limits() {
     done
 }
 
+reconfigure_container_network() {
+    echo -e "\n${CYAN}═══ RECONFIGURE CONTAINER NETWORK ═══${NC}"
+    if [ "$CONTAINER_COUNT" -eq 1 ]; then
+        local idx=1
+    else
+        echo -e "\n  Select container to reconfigure:"
+        for i in $(seq 1 $CONTAINER_COUNT); do
+            local cname=$(get_container_name $i)
+            local cnet=$(get_container_network $i)
+            echo "    ${i}. ${cname} (current net: ${cnet:-host})"
+        done
+        read -p "\n  Container number (1-${CONTAINER_COUNT}): " idx < /dev/tty || true
+        if ! [[ "$idx" =~ ^[0-9]+$ ]] || [ "$idx" -lt 1 ] || [ "$idx" -gt "$CONTAINER_COUNT" ]; then
+            echo -e "  ${RED}Invalid selection.${NC}"; return
+        fi
+    fi
+
+    local cname=$(get_container_name $idx)
+    local cur_net=$(get_container_network $idx)
+    echo -e "\n  Reconfiguring network for ${BOLD}${cname}${NC}"
+    echo -e "  Current network: ${GREEN}${cur_net:-host}${NC}"
+    echo -e "  Enter new network name. To use default (host), enter 'host' or press Enter."
+    read -p "  New network: " new_net < /dev/tty || true
+    
+    if [ "$new_net" = "host" ]; then new_net=""; fi
+
+    if [ "$new_net" != "$cur_net" ]; then
+        eval "CONTAINER_NETWORK_${idx}=\"${new_net}\""
+        save_settings
+        echo -e "  ${GREEN}✓ Network for ${cname} updated to '${new_net:-host}'.${NC}"
+        echo -e "\n  Recreating ${cname} to apply changes..."
+        if run_conduit_container "$idx"; then
+            echo -e "  ${GREEN}✓ ${cname} recreated successfully.${NC}"
+        else
+            echo -e "  ${RED}✗ Failed to recreate ${cname}.${NC}"
+        fi
+    else
+        echo -e "  No changes made."
+    fi
+}
+
 #═══════════════════════════════════════════════════════════════════════
 # show_logs() - Display color-coded Docker logs
 #═══════════════════════════════════════════════════════════════════════
@@ -5159,6 +5216,7 @@ show_settings_menu() {
             echo -e "  1. ⚙️  Change settings (max-clients, bandwidth)"
             echo -e "  2. 📊 Set data usage cap"
             echo -e "  l. 🖥️  Set resource limits (CPU, memory)"
+            echo -e "  n. 🌐 Reconfigure container network"
             echo ""
             echo -e "  3. 💾 Backup node key"
             echo -e "  4. 📥 Restore node key"
@@ -5199,6 +5257,11 @@ show_settings_menu() {
                 ;;
             l|L)
                 change_resource_limits
+                read -n 1 -s -r -p "Press any key to return..." < /dev/tty || true
+                redraw=true
+                ;;
+            n|N)
+                reconfigure_container_network
                 read -n 1 -s -r -p "Press any key to return..." < /dev/tty || true
                 redraw=true
                 ;;
