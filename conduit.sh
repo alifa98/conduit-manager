@@ -460,6 +460,18 @@ prompt_settings() {
         CONTAINER_COUNT=$rec_containers
     fi
 
+    for i in $(seq 1 $CONTAINER_COUNT); do
+        local cname_disp="conduit"
+        [ "$i" -gt 1 ] && cname_disp="conduit-${i}"
+        echo ""
+        echo -e "${CYAN}───────────────────────────────────────────────────────────────${NC}"
+        echo -e "  Enter Docker network for container ${i} (${cname_disp})"
+        echo -e "  Press Enter for default network behavior (host)"
+        echo -e "${CYAN}───────────────────────────────────────────────────────────────${NC}"
+        read -p "  Network for ${cname_disp}: " input_network < /dev/tty || true
+        declare "CONTAINER_NETWORK_${i}"="$input_network"
+    done
+
     echo ""
     echo -e "${CYAN}───────────────────────────────────────────────────────────────${NC}"
     echo -e "  ${BOLD}Your Settings:${NC}"
@@ -470,6 +482,17 @@ prompt_settings() {
         echo -e "    Bandwidth:   ${GREEN}${BANDWIDTH}${NC} Mbps"
     fi
     echo -e "    Containers:  ${GREEN}${CONTAINER_COUNT}${NC}"
+    for i in $(seq 1 $CONTAINER_COUNT); do
+        local net_var="CONTAINER_NETWORK_${i}"
+        local net_val="${!net_var}"
+        local cname_disp="conduit"
+        [ "$i" -gt 1 ] && cname_disp="conduit-${i}"
+        if [ -z "$net_val" ]; then
+            echo -e "    Network (${cname_disp}): ${GREEN}host (default)${NC}"
+        else
+            echo -e "    Network (${cname_disp}): ${GREEN}${net_val}${NC}"
+        fi
+    done
     echo -e "${CYAN}───────────────────────────────────────────────────────────────${NC}"
     echo ""
 
@@ -651,6 +674,11 @@ run_conduit() {
         local mem=$(get_container_memory $i)
         [ -n "$cpus" ] && resource_args+="--cpus $cpus "
         [ -n "$mem" ] && resource_args+="--memory $mem "
+        local net_var="CONTAINER_NETWORK_${i}"
+        local net_val="${!net_var}"
+        local network_args="--network host"
+        [ -n "$net_val" ] && network_args="--network $net_val"
+
         # shellcheck disable=SC2086
         docker run -d \
             --name "$cname" \
@@ -658,7 +686,7 @@ run_conduit() {
             --log-opt max-size=15m \
             --log-opt max-file=3 \
             -v "${vname}:/home/conduit/data" \
-            --network host \
+            $network_args \
             $resource_args \
             "$CONDUIT_IMAGE" \
             start --max-clients "$MAX_CLIENTS" --bandwidth "$BANDWIDTH" --stats-file
@@ -721,6 +749,11 @@ TELEGRAM_WEEKLY_SUMMARY=$_tg_weekly
 TELEGRAM_SERVER_LABEL="$_tg_label"
 TELEGRAM_START_HOUR=$_tg_start_hour
 EOF
+    for i in $(seq 1 ${CONTAINER_COUNT:-1}); do
+        local net_var="CONTAINER_NETWORK_${i}"
+        local net_val="${!net_var}"
+        echo "CONTAINER_NETWORK_${i}=\"$net_val\"" >> "$_tmp"
+    done
     chmod 600 "$_tmp" 2>/dev/null || true
     mv "$_tmp" "$INSTALL_DIR/settings.conf"
 
@@ -873,6 +906,10 @@ TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
 TELEGRAM_INTERVAL=${TELEGRAM_INTERVAL:-6}
 TELEGRAM_ENABLED=${TELEGRAM_ENABLED:-false}
 
+for i in $(seq 1 5); do
+    declare "CONTAINER_NETWORK_${i}"=""
+done
+
 # Ensure we're running as root
 if [ "$EUID" -ne 0 ]; then
     echo -e "${RED}Error: This command must be run as root (use sudo conduit)${NC}"
@@ -977,6 +1014,13 @@ get_container_memory() {
     echo "${val:-${DOCKER_MEMORY:-}}"
 }
 
+get_container_network() {
+    local idx=${1:-1}
+    local var="CONTAINER_NETWORK_${idx}"
+    local val="${!var}"
+    echo "${val:-}"
+}
+
 run_conduit_container() {
     local idx=${1:-1}
     local name=$(get_container_name $idx)
@@ -985,6 +1029,7 @@ run_conduit_container() {
     local bw=$(get_container_bandwidth $idx)
     local cpus=$(get_container_cpus $idx)
     local mem=$(get_container_memory $idx)
+    local net=$(get_container_network $idx)
     # Remove any existing container with the same name to avoid conflicts
     if docker ps -a 2>/dev/null | grep -q "[[:space:]]${name}$"; then
         docker rm -f "$name" 2>/dev/null || true
@@ -992,6 +1037,8 @@ run_conduit_container() {
     local resource_args=""
     [ -n "$cpus" ] && resource_args+="--cpus $cpus "
     [ -n "$mem" ] && resource_args+="--memory $mem "
+    local network_args="--network host"
+    [ -n "$net" ] && network_args="--network $net"
     # shellcheck disable=SC2086
     docker run -d \
         --name "$name" \
@@ -999,7 +1046,7 @@ run_conduit_container() {
         --log-opt max-size=15m \
         --log-opt max-file=3 \
         -v "${vol}:/home/conduit/data" \
-        --network host \
+        $network_args \
         $resource_args \
         "$CONDUIT_IMAGE" \
         start --max-clients "$mc" --bandwidth "$bw" --stats-file
@@ -4023,6 +4070,10 @@ EOF
         [ -n "${!bw_var}" ] && echo "${bw_var}=${!bw_var}" >> "$_tmp"
         [ -n "${!cpu_var}" ] && echo "${cpu_var}=${!cpu_var}" >> "$_tmp"
         [ -n "${!mem_var}" ] && echo "${mem_var}=${!mem_var}" >> "$_tmp"
+    done
+    for i in $(seq 1 5); do
+        local net_var="CONTAINER_NETWORK_${i}"
+        [ -n "${!net_var}" ] && echo "${net_var}=\"${!net_var}\"" >> "$_tmp"
     done
     chmod 600 "$_tmp" 2>/dev/null || true
     mv "$_tmp" "$INSTALL_DIR/settings.conf"
