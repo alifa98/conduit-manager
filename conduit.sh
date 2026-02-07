@@ -696,10 +696,10 @@ run_conduit() {
             --log-opt max-size=15m \
             --log-opt max-file=3 \
             -v "${vname}:/home/conduit/data" \
-            --network host \
+            --network $CUSTOM_NETWORK \
             $resource_args \
             "$CONDUIT_IMAGE" \
-            start --max-clients "$MAX_CLIENTS" --bandwidth "$BANDWIDTH" --network $CUSTOM_NETWORK --stats-file
+            start --max-clients "$MAX_CLIENTS" --bandwidth "$BANDWIDTH" --stats-file
 
         if [ $? -eq 0 ]; then
             log_success "$cname started"
@@ -5874,7 +5874,7 @@ show_settings_menu() {
             echo -e "${CYAN}─────────────────────────────────────────────────────────────────${NC}"
             echo -e "${CYAN}  SETTINGS & TOOLS${NC}"
             echo -e "${CYAN}─────────────────────────────────────────────────────────────────${NC}"
-            echo -e "  1. ⚙️  Change settings (max-clients, bandwidth)"
+            echo -e "  1. ⚙️  Change settings (max-clients, bandwidth, network)"
             echo -e "  2. 📊 Set data usage cap"
             echo -e "  l. 🖥️  Set resource limits (CPU, memory)"
             echo ""
@@ -7321,7 +7321,7 @@ print_summary() {
     echo -e "${GREEN}║${NC}  ${CYAN}conduit stats${NC}         # View live statistics + CPU/RAM          ${GREEN}║${NC}"
     echo -e "${GREEN}║${NC}  ${CYAN}conduit status${NC}        # Quick status with resource usage        ${GREEN}║${NC}"
     echo -e "${GREEN}║${NC}  ${CYAN}conduit logs${NC}          # View raw logs                           ${GREEN}║${NC}"
-    echo -e "${GREEN}║${NC}  ${CYAN}conduit settings${NC}      # Change max-clients/bandwidth            ${GREEN}║${NC}"
+    echo -e "${GREEN}║${NC}  ${CYAN}conduit settings${NC}      # Change max-clients/bandwidth/network    ${GREEN}║${NC}"
     echo -e "${GREEN}║${NC}  ${CYAN}conduit uninstall${NC}     # Remove everything                       ${GREEN}║${NC}"
     echo -e "${GREEN}║${NC}                                                                   ${GREEN}║${NC}"
     echo -e "${GREEN}╚═══════════════════════════════════════════════════════════════════╝${NC}"
