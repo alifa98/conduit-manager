@@ -379,9 +379,22 @@ prompt_settings() {
     echo -e "    Recommended max-clients: ${GREEN}${recommended}${NC}"
     echo ""
     echo -e "  ${BOLD}Conduit Options:${NC}"
+    echo -e "    ${YELLOW}--network${NC}      Docker network mode (default: host)"
     echo -e "    ${YELLOW}--max-clients${NC}  Maximum proxy clients (1-1000)"
     echo -e "    ${YELLOW}--bandwidth${NC}    Bandwidth per peer in Mbps (1-40, or -1 for unlimited)"
     echo ""
+
+    echo -e "${CYAN}───────────────────────────────────────────────────────────────${NC}"
+    echo -e "  Enter network name"
+    echo -e "  Press Enter for default: ${GREEN}host${NC}"
+    echo -e "${CYAN}───────────────────────────────────────────────────────────────${NC}"
+    read -p "  network name: " input_network < /dev/tty || true
+
+    if [ -z "$input_network" ]; then
+        CUSTOM_NETWORK="host"
+    else
+        CUSTOM_NETWORK=$input_network
+    fi
     
     echo -e "${CYAN}───────────────────────────────────────────────────────────────${NC}"
     echo -e "  Enter max-clients (1-1000)"
@@ -487,6 +500,7 @@ prompt_settings() {
     echo ""
     echo -e "${CYAN}───────────────────────────────────────────────────────────────${NC}"
     echo -e "  ${BOLD}Your Settings:${NC}"
+    echo -e "    Network: ${GREEN}${CUSTOM_NETWORK}${NC}"
     echo -e "    Max Clients: ${GREEN}${MAX_CLIENTS}${NC}"
     if [ "$BANDWIDTH" == "-1" ]; then
         echo -e "    Bandwidth:   ${GREEN}Unlimited${NC}"
@@ -685,7 +699,7 @@ run_conduit() {
             --network host \
             $resource_args \
             "$CONDUIT_IMAGE" \
-            start --max-clients "$MAX_CLIENTS" --bandwidth "$BANDWIDTH" --stats-file
+            start --max-clients "$MAX_CLIENTS" --bandwidth "$BANDWIDTH" --network $CUSTOM_NETWORK --stats-file
 
         if [ $? -eq 0 ]; then
             log_success "$cname started"
@@ -697,9 +711,9 @@ run_conduit() {
     sleep 3
     if [ -n "$(docker ps -q --filter name=conduit 2>/dev/null)" ]; then
         if [ "$BANDWIDTH" == "-1" ]; then
-            log_success "Settings: max-clients=$MAX_CLIENTS, bandwidth=Unlimited, containers=$count"
+            log_success "Settings: max-clients=$MAX_CLIENTS, bandwidth=Unlimited, network=$CUSTOM_NETWORK, containers=$count"
         else
-            log_success "Settings: max-clients=$MAX_CLIENTS, bandwidth=${BANDWIDTH}Mbps, containers=$count"
+            log_success "Settings: max-clients=$MAX_CLIENTS, bandwidth=${BANDWIDTH}Mbps, network=$CUSTOM_NETWORK, containers=$count"
         fi
     else
         log_error "Conduit failed to start"
@@ -727,6 +741,7 @@ save_settings_install() {
     fi
     local _tmp="$INSTALL_DIR/settings.conf.tmp.$$"
     cat > "$_tmp" << EOF
+CUSTOM_NETWORK=$CUSTOM_NETWORK
 MAX_CLIENTS=$MAX_CLIENTS
 BANDWIDTH=$BANDWIDTH
 CONTAINER_COUNT=${CONTAINER_COUNT:-1}
@@ -884,6 +899,7 @@ NC='\033[0m'
 
 # Load settings
 [ -f "$INSTALL_DIR/settings.conf" ] && source "$INSTALL_DIR/settings.conf"
+CUSTOM_NETWORK=${CUSTOM_NETWORK:-host}
 MAX_CLIENTS=${MAX_CLIENTS:-200}
 BANDWIDTH=${BANDWIDTH:-5}
 CONTAINER_COUNT=${CONTAINER_COUNT:-1}
@@ -973,6 +989,13 @@ fix_volume_permissions() {
 }
 
 # Helper: Start/recreate conduit container with current settings
+get_container_network() {
+    local idx=${1:-1}
+    local var="CUSTOM_NETWORK_${idx}"
+    local val="${!var}"
+    echo "${val:-$CUSTOM_NETWORK}"
+}
+
 get_container_max_clients() {
     local idx=${1:-1}
     local var="MAX_CLIENTS_${idx}"
@@ -1005,6 +1028,7 @@ run_conduit_container() {
     local idx=${1:-1}
     local name=$(get_container_name $idx)
     local vol=$(get_volume_name $idx)
+    local nw=$(get_container_network $idx)
     local mc=$(get_container_max_clients $idx)
     local bw=$(get_container_bandwidth $idx)
     local cpus=$(get_container_cpus $idx)
@@ -1023,7 +1047,7 @@ run_conduit_container() {
         --log-opt max-size=15m \
         --log-opt max-file=3 \
         -v "${vol}:/home/conduit/data" \
-        --network host \
+        --network "$nw" \
         $resource_args \
         "$CONDUIT_IMAGE" \
         start --max-clients "$mc" --bandwidth "$bw" --stats-file
@@ -1045,6 +1069,7 @@ print_live_stats_header() {
     # Check for per-container overrides
     local has_overrides=false
     for i in $(seq 1 $CONTAINER_COUNT); do
+        local nw_var="CUSTOM_NETWORK_${i}"
         local mc_var="MAX_CLIENTS_${i}"
         local bw_var="BANDWIDTH_${i}"
         if [ -n "${!mc_var}" ] || [ -n "${!bw_var}" ]; then
@@ -1054,11 +1079,12 @@ print_live_stats_header() {
     done
     if [ "$has_overrides" = true ] && [ "$CONTAINER_COUNT" -gt 1 ]; then
         for i in $(seq 1 $CONTAINER_COUNT); do
+            local nw=$(get_container_network $i)
             local mc=$(get_container_max_clients $i)
             local bw=$(get_container_bandwidth $i)
             local bw_d="Unlimited"
             [ "$bw" != "-1" ] && bw_d="${bw}Mbps"
-            local line="$(get_container_name $i): ${mc} clients, ${bw_d}"
+            local line="$(get_container_name $i): ${mc} clients, ${bw_d}, network: ${nw}"
             printf "║  ${GREEN}%-64s${CYAN}║${EL}\n" "$line"
         done
     else
@@ -3263,6 +3289,7 @@ show_status() {
     # Check if any per-container overrides exist
     local has_overrides=false
     for i in $(seq 1 $CONTAINER_COUNT); do
+        local nw_var="CUSTOM_NETWORK_${i}"
         local mc_var="MAX_CLIENTS_${i}"
         local bw_var="BANDWIDTH_${i}"
         if [ -n "${!mc_var}" ] || [ -n "${!bw_var}" ]; then
@@ -3273,6 +3300,7 @@ show_status() {
     if [ "$has_overrides" = true ]; then
         echo -e "  Containers:   ${CONTAINER_COUNT}${EL}"
         for i in $(seq 1 $CONTAINER_COUNT); do
+            local nw=$(get_container_network $i)
             local mc=$(get_container_max_clients $i)
             local bw=$(get_container_bandwidth $i)
             local bw_d="Unlimited"
@@ -3448,6 +3476,7 @@ restart_conduit() {
     for i in $(seq 1 $CONTAINER_COUNT); do
         local name=$(get_container_name $i)
         local vol=$(get_volume_name $i)
+        local want_nw=$(get_container_network $i)
         local want_mc=$(get_container_max_clients $i)
         local want_bw=$(get_container_bandwidth $i)
         local want_cpus=$(get_container_cpus $i)
@@ -3457,9 +3486,11 @@ restart_conduit() {
             # Container is running — check if settings match
             local cur_args=$(docker inspect --format '{{join .Args " "}}' "$name" 2>/dev/null)
             local needs_recreate=false
-            # Check if max-clients or bandwidth args differ (portable, no -oP)
+            # Check if max-clients, bandwidth, or network args differ (portable, no -oP)
+            local cur_nw=$(echo "$cur_args" | sed -n 's/.*--network \([^ ]*\).*/\1/p' 2>/dev/null)
             local cur_mc=$(echo "$cur_args" | sed -n 's/.*--max-clients \([^ ]*\).*/\1/p' 2>/dev/null)
             local cur_bw=$(echo "$cur_args" | sed -n 's/.*--bandwidth \([^ ]*\).*/\1/p' 2>/dev/null)
+            [ "$cur_nw" != "$want_nw" ] && needs_recreate=true
             [ "$cur_mc" != "$want_mc" ] && needs_recreate=true
             [ "$cur_bw" != "$want_bw" ] && needs_recreate=true
             # Check resource limits
@@ -3566,6 +3597,7 @@ change_settings() {
     echo -e "  ${CYAN}──────────────────────────────────────────────────────────${NC}"
     for i in $(seq 1 $CONTAINER_COUNT); do
         local cname=$(get_container_name $i)
+        local want_nw=$(get_container_network $i)
         local mc=$(get_container_max_clients $i)
         local bw=$(get_container_bandwidth $i)
         local cpus=$(get_container_cpus $i)
@@ -3600,8 +3632,12 @@ change_settings() {
     fi
 
     # Get new values
+    local cur_nw=$(get_container_network ${targets[0]})
     local cur_mc=$(get_container_max_clients ${targets[0]})
     local cur_bw=$(get_container_bandwidth ${targets[0]})
+    echo ""
+    read -p "  New Network [${cur_nw}]: " new_network < /dev/tty || true
+
     echo ""
     read -p "  New max-clients (1-1000) [${cur_mc}]: " new_clients < /dev/tty || true
 
@@ -3617,6 +3653,13 @@ change_settings() {
     else
         read -p "  New bandwidth in Mbps (1-40) [${cur_bw}]: " input_bw < /dev/tty || true
         [ -n "$input_bw" ] && new_bandwidth="$input_bw"
+    fi
+
+    # Preset network to ho
+    local valid_nw="host"
+    if [ -n "$new_network" ]; then
+        # TODO: Check if network exists? For now just allow any non-empty string.
+        valid_nw="$new_network"
     fi
 
     # Validate max-clients
@@ -3647,15 +3690,20 @@ change_settings() {
     # Apply to targets
     if [ "$target" = "a" ] || [ "$target" = "A" ]; then
         # Apply to all = update global defaults and clear per-container overrides
+        [ -n "$valid_nm" ] && CUSTOM_NETWORK="$valid_nm"
         [ -n "$valid_mc" ] && MAX_CLIENTS="$valid_mc"
         [ -n "$valid_bw" ] && BANDWIDTH="$valid_bw"
         for i in $(seq 1 "$CONTAINER_COUNT"); do
+            unset "CUSTOM_NETWORK_${i}" 2>/dev/null || true
             unset "MAX_CLIENTS_${i}" 2>/dev/null || true
             unset "BANDWIDTH_${i}" 2>/dev/null || true
         done
     else
         # Apply to specific container
         local idx=${targets[0]}
+        if [ -n "$valid_nw" ]; then
+            eval "CUSTOM_NETWORK_${idx}=${valid_nw}"
+        fi
         if [ -n "$valid_mc" ]; then
             eval "MAX_CLIENTS_${idx}=${valid_mc}"
         fi
@@ -3679,11 +3727,12 @@ change_settings() {
         fix_volume_permissions $i
         run_conduit_container $i
         if [ $? -eq 0 ]; then
+            local nw=$(get_container_network $i)
             local mc=$(get_container_max_clients $i)
             local bw=$(get_container_bandwidth $i)
             local bw_d="Unlimited"
             [ "$bw" != "-1" ] && bw_d="${bw} Mbps"
-            echo -e "  ${GREEN}✓ ${name}${NC} — clients: ${mc}, bandwidth: ${bw_d}"
+            echo -e "  ${GREEN}✓ ${name}${NC} — clients: ${mc}, bandwidth: ${bw_d}, network: ${nw}"
         else
             echo -e "  ${RED}✗ Failed to restart ${name}${NC}"
         fi
@@ -4333,6 +4382,7 @@ manage_containers() {
                 for i in $(seq $((CONTAINER_COUNT + 1)) "$old_count"); do
                     unset "CPUS_${i}" \
                           "MEMORY_${i}" \
+                          "CUSTOM_NETWORK_${i}" \
                           "MAX_CLIENTS_${i}" \
                           "BANDWIDTH_${i}" 2>/dev/null || true
                 done
@@ -4483,13 +4533,16 @@ manage_containers() {
                     local needs_recreate=false
                     local want_cpus=$(get_container_cpus $i)
                     local want_mem=$(get_container_memory $i)
+                    local want_nw=$(get_container_network $i)
                     local want_mc=$(get_container_max_clients $i)
                     local want_bw=$(get_container_bandwidth $i)
                     if echo "$existing_containers" | grep -q "^${name}$"; then
                         local insp_line=$(echo "$all_inspect" | grep "/${name} " 2>/dev/null)
                         local cur_args=$(echo "$insp_line" | sed 's/.*\/'"$name"' //' | sed 's/ |||.*//')
+                        local cur_nw=$(echo "$cur_args" | sed -n 's/.*--network \([^ ]*\).*/\1/p' 2>/dev/null)
                         local cur_mc=$(echo "$cur_args" | sed -n 's/.*--max-clients \([^ ]*\).*/\1/p' 2>/dev/null)
                         local cur_bw=$(echo "$cur_args" | sed -n 's/.*--bandwidth \([^ ]*\).*/\1/p' 2>/dev/null)
+                        [ "$cur_nw" != "$want_nw" ] && needs_recreate=true
                         [ "$cur_mc" != "$want_mc" ] && needs_recreate=true
                         [ "$cur_bw" != "$want_bw" ] && needs_recreate=true
                         local cur_nano=$(echo "$insp_line" | sed 's/.*|||//' | awk '{print $1}')
@@ -4722,6 +4775,7 @@ TRACKER_ENABLED=${TRACKER_ENABLED:-true}
 EOF
     # Save per-container overrides
     for i in $(seq 1 "$CONTAINER_COUNT"); do
+        local mc_var="CUSTOM_NETWORK_${i}"
         local mc_var="MAX_CLIENTS_${i}"
         local bw_var="BANDWIDTH_${i}"
         local cpu_var="CPUS_${i}"
